@@ -1,0 +1,23 @@
+// Partial Ancestral Graph
+digraph {
+	X09 [label=X09]
+	X00 [label=X00]
+	X02 [label=X02]
+	X05 [label=X05]
+	X07 [label=X07]
+	X03 [label=X03]
+	X04 [label=X04]
+	X01 [label=X01]
+	X08 [label=X08]
+	X06 [label=X06]
+	X09 -> X08 [arrowhead=odot arrowtail=none dir=both]
+	X09 -> X01 [arrowhead=normal dir=both]
+	X09 -> X06 [arrowhead=normal dir=both]
+	X00 -> X04 [arrowhead=normal arrowtail=odot dir=both]
+	X02 -> X01 [arrowhead=normal arrowtail=odot dir=both]
+	X05 -> X07 [arrowhead=normal]
+	X05 -> X06 [arrowhead=normal dir=both]
+	X03 -> X05 [arrowhead=normal]
+	X03 -> X04 [arrowhead=normal]
+	X01 -> X03 [arrowhead=normal]
+}
