@@ -1,212 +1,319 @@
+# utils.py
 from __future__ import annotations
-from graphviz import Digraph
 from itertools import combinations
-from typing import Dict, FrozenSet, List, Optional, Set, Tuple
+from collections import deque
+from graphviz import Digraph
 import pyagrum as gum
-from PAG import *
 
 
-def draw_pag(pag, filename="pag"):
+def k_subsets(lst, k):
+    """Itère sur tous les sous-ensembles de taille k de lst."""
+    return combinations(lst, k)
+
+
+def unshielded_triples(C):
+    triples = set()
+    for Xj in C.nodes:
+        nbrs = list(C.adj(Xj))
+        for Xi, Xk in combinations(nbrs, 2):
+            if not C.has_edge(Xi, Xk):
+                triples.add((Xi, Xj, Xk))
+    return list(triples)
+
+
+def possible_d_sep(C, Xi, Xj=None):
     """
-    Visualisation d'un PAG (FCI).
-    Marques:
-      o-o  : cercle-cercle
-      -->  : flèche
-      <->  : bidirectionnelle
-      ---  : non orientée
-    """
-    dot = Digraph(comment="Partial Ancestral Graph")
+    Définition 3.3 :
+      Xk ∈ pds(C, Xi, Xj) ssi il existe un chemin π entre Xi et Xk tel que
+      pour tout sous-chemin consécutif <Xm, Xl, Xh> de π :
+         - Xl est un collider sur ce sous-chemin dans C, OU
+         - <Xm, Xl, Xh> forme un triangle dans C.
 
-    # ajouter noeuds
-    for n in pag.nodes:
+    Remarque 3.1 :
+      Xj ne joue pas de rôle, donc l'argument Xj est ignoré (mais conservé pour l'API).
+    """
+    seen_states = {(None, Xi)}   # (prev, cur)
+    queue = [(None, Xi)]
+    reached = {Xi}
+
+    while queue:
+        prev, cur = queue.pop(0)
+
+        for nxt in C.adj(cur):
+            if nxt == prev:
+                continue
+
+            # Condition sur chaque triple consécutif <prev,cur,nxt>
+            ok = True
+            if prev is not None:
+                if not (C.is_collider(prev, cur, nxt) or C.is_triangle(prev, cur, nxt)):
+                    ok = False
+
+            if not ok:
+                continue
+
+            st = (cur, nxt)
+            if st in seen_states:
+                continue
+
+            seen_states.add(st)
+            reached.add(nxt)
+            queue.append((cur, nxt))
+
+    # Dans l'algo 4.3 on enlève ensuite {Xi, Xj} de toute façon.
+    reached.discard(Xi)
+    return reached
+
+def is_uncovered_path(C, path):
+    for i in range(1, len(path) - 1):
+        if C.has_edge(path[i - 1], path[i + 1]):
+            return False
+    return True
+
+
+def _pd_allows_step(C, vi, vj):
+    if not C.has_edge(vi, vj):
+        return False
+    return (C.get_end(vi, vj) != "arrow") and (C.get_end(vj, vi) != "tail")
+
+
+def is_potentially_directed_path(C, path):
+    for i in range(len(path) - 1):
+        if not _pd_allows_step(C, path[i], path[i + 1]):
+            return False
+    return True
+
+
+def find_uncovered_pd_path(C, v0, vn, max_len=25):
+    """
+    Cherche un chemin p=(v0,...,vn) qui est:
+      - uncovered
+      - potentially directed de v0 vers vn
+    """
+    q = deque()
+    q.append([v0])
+
+    while q:
+        path = q.popleft()
+        if len(path) > max_len:
+            continue
+
+        last = path[-1]
+
+        if last == vn and len(path) >= 2:
+            if is_uncovered_path(C, path) and is_potentially_directed_path(C, path):
+                return path
+            continue
+
+        for nxt in C.adj(last):
+            if nxt in path:
+                continue
+
+            # Def 10 : compatible avec une p.d. path dans le sens last -> nxt
+            if not _pd_allows_step(C, last, nxt):
+                continue
+
+            newp = path + [nxt]
+
+            # prune uncovered local : éviter un triple shielded immédiatement
+            if len(newp) >= 3 and C.has_edge(newp[-3], newp[-1]):
+                continue
+
+            q.append(newp)
+
+    return None
+
+
+def find_uncovered_circle_path(C, a, b, max_len=25):
+    """
+    uncovered circle path entre a et b.
+    Un "circle path" = toutes les arêtes du chemin sont o-o.
+    """
+    q = deque()
+    q.append([a])
+
+    while q:
+        path = q.popleft()
+        if len(path) > max_len:
+            continue
+
+        last = path[-1]
+        if last == b and len(path) >= 2:
+            if not is_uncovered_path(C, path):
+                continue
+            ok = True
+            for i in range(len(path) - 1):
+                if not (C.is_o(path[i], path[i + 1]) and C.is_o(path[i + 1], path[i])):
+                    ok = False
+                    break
+            if ok:
+                return path
+            continue
+
+        for nxt in C.adj(last):
+            if nxt in path:
+                continue
+
+            # circle edge only: o-o
+            if not (C.is_o(last, nxt) and C.is_o(nxt, last)):
+                continue
+
+            newp = path + [nxt]
+            if len(newp) >= 3 and C.has_edge(newp[-3], newp[-1]):
+                continue
+
+            q.append(newp)
+
+    return None
+
+
+def find_discriminating_path(C, beta, gamma, alpha, max_len=25):
+    """
+    Cherche un chemin p = <X, ..., W, V, Y> discriminating pour V
+    """
+    if not (C.has_edge(alpha, beta) and C.has_edge(beta, gamma)):
+        return None
+
+    q = deque()
+    q.append([alpha])
+
+    while q:
+        chain = q.popleft()
+        if len(chain) > max_len:
+            continue
+
+        X = chain[0]
+        path = chain + [beta, gamma]
+
+        # (i) au moins 3 arêtes => au moins 4 sommets
+        if len(path) >= 4:
+            # (iii.a) X non adjacent à Y(=gamma)
+            if C.has_edge(X, gamma):
+                pass
+            else:
+                ok = True
+                idx_beta = len(path) - 2
+                between = path[1:idx_beta]  # inclut alpha
+
+                for i in range(1, idx_beta):
+                    Z = path[i]
+                    prev = path[i - 1]
+                    nxt = path[i + 1]
+
+                    # collider sur le chemin: prev *-> Z <-* nxt (arrowheads vers Z)
+                    if not C.is_collider(prev, Z, nxt):
+                        ok = False
+                        break
+
+                    # parent de gamma: Z -> gamma
+                    # dans nos marks: tail au niveau de Z, arrow au niveau de gamma
+                    if not (C.has_edge(Z, gamma) and C.is_tail(Z, gamma) and C.is_arrow(gamma, Z)):
+                        ok = False
+                        break
+
+                if ok:
+                    return path
+
+        cur = chain[0]
+        next_node = chain[1] if len(chain) >= 2 else beta
+
+        # Pour réduire l'explosion, si cur n'est PAS parent de gamma, inutile d'étendre.
+        if not (C.has_edge(cur, gamma) and C.is_tail(cur, gamma) and C.is_arrow(gamma, cur)):
+            continue
+
+        for newX in C.adj(cur):
+            if newX in chain:
+                continue
+
+            if not C.is_collider(newX, cur, next_node):
+                continue
+
+            if C.has_edge(newX, gamma):
+                continue
+
+            q.append([newX] + chain)
+
+    return None
+
+
+def draw_pag(C, filename="pag"):
+    """
+    Visualisation d'un PAG (FCI) avec Graphviz.
+
+    Conventions PAG:
+      - o     : cercle
+      - arrow : flèche
+      - tail  : barre
+
+    Rendu:
+      o-o    : cercles
+      tail->arrow : flèche
+      arrow-arrow : bidirectionnelle
+      tail-tail   : non orientée
+    """
+    dot = Digraph(name=filename, comment="Partial Ancestral Graph")
+
+    # noeuds
+    for n in C.nodes:
         dot.node(str(n), str(n))
 
     seen = set()
-    for a in pag.nodes:
-        for b in pag.neighbors(a):
-            if (b, a) in seen:
+    for u in C.nodes:
+        for v in C.adj(u):
+            if (v, u) in seen:
                 continue
-            seen.add((a, b))
+            seen.add((u, v))
 
-            ma = pag.mark(a, b)
-            mb = pag.mark(b, a)
+            mu = C.get_end(u, v)
+            mv = C.get_end(v, u)
 
-            # déterminer le type d'arête
-            if ma == "-" and mb == ">":
-                dot.edge(str(a), str(b), arrowhead="normal")
-            elif ma == ">" and mb == "-":
-                dot.edge(str(b), str(a), arrowhead="normal")
-            elif ma == ">" and mb == ">":
-                dot.edge(str(a), str(b), arrowhead="normal", dir="both")
-            elif ma == "-" and mb == "-":
-                dot.edge(str(a), str(b), arrowhead="none")
+            # cas simples
+            if mu == "tail" and mv == "arrow":
+                dot.edge(str(u), str(v), arrowhead="normal")
+            elif mu == "arrow" and mv == "tail":
+                dot.edge(str(v), str(u), arrowhead="normal")
+            elif mu == "arrow" and mv == "arrow":
+                dot.edge(str(u), str(v), arrowhead="normal", dir="both")
+            elif mu == "tail" and mv == "tail":
+                dot.edge(str(u), str(v), arrowhead="none")
             else:
-                # cas avec cercles
+                # cas avec cercles (o)
                 dot.edge(
-                    str(a),
-                    str(b),
-                    arrowhead="odot" if mb == "o" else "normal",
-                    arrowtail="odot" if ma == "o" else "none",
+                    str(u),
+                    str(v),
                     dir="both",
+                    arrowhead="odot" if mv == "o" else "normal",
+                    arrowtail="odot" if mu == "o" else "none",
                 )
 
     return dot
 
-# Path utilities (needed for R4..R10 and PDS)
-
-def is_uncovered_path(pag: OrderedPAG, path: List[str]) -> bool:
-    # No chord between non-consecutive nodes
-    for i in range(len(path)):
-        for j in range(i + 2, len(path)):
-            if j == i + 1:
-                continue
-            if pag.adjacent(path[i], path[j]):
-                return False
-    return True
 
 
-def all_simple_paths(pag: OrderedPAG, start: str, goal: str, max_len: int) -> List[List[str]]:
-    paths = []
-    stack = [(start, [start])]
-    while stack:
-        node, path = stack.pop()
-        if len(path) > max_len + 1:
-            continue
-        if node == goal:
-            paths.append(path)
-            continue
-        for nb in pag.neighbors(node):
-            if nb in path:
-                continue
-            stack.append((nb, path + [nb]))
-    return paths
+def make_bnlearner_ci(data, alpha=0.05, test="chi2"):
 
+    learner = gum.BNLearner(data)
+    def ci_test(x, y, cond_set, a=alpha):
+        # Safety: remove x,y + dedupe
+        cond = list(cond_set) if cond_set else []
+        cond = [v for v in cond if v != x and v != y]
+        cond = list(dict.fromkeys(cond))
 
-def is_circle_path(pag: OrderedPAG, path: List[str]) -> bool:
-    for u, v in zip(path, path[1:]):
-        if not (pag.is_circle(u, v) and pag.is_circle(v, u)):
-            return False
-    return True
+        if test.lower() == "g2":
+            _, pval = learner.G2(x, y, cond)
+        else:
+            _, pval = learner.chi2(x, y, cond)
 
+        return pval >= a
 
-def is_possibly_directed_edge(pag: OrderedPAG, u: str, v: str) -> bool:
-    # "Possibly directed u -> v" means: no arrowhead into u on that edge
-    return pag.adjacent(u, v) and pag.mark(u, v) != ">"
+    return ci_test
 
-
-def is_pd_path(pag: OrderedPAG, path: List[str]) -> bool:
-    for u, v in zip(path, path[1:]):
-        if not is_possibly_directed_edge(pag, u, v):
-            return False
-    return True
-
-
-def uncovered_pd_paths(pag: OrderedPAG, a: str, c: str, max_len: int) -> List[List[str]]:
-    out = []
-    for p in all_simple_paths(pag, a, c, max_len):
-        if len(p) >= 2 and is_uncovered_path(pag, p) and is_pd_path(pag, p):
-            out.append(p)
-    return out
-
-
-def uncovered_circle_paths(pag: OrderedPAG, a: str, b: str, max_len: int) -> List[List[str]]:
-    out = []
-    for p in all_simple_paths(pag, a, b, max_len):
-        if len(p) >= 3 and is_uncovered_path(pag, p) and is_circle_path(pag, p):
-            out.append(p)
-    return out
-
-
-def discriminating_paths_for_B(pag: OrderedPAG, D: str, C: str, B: str, max_len: int) -> List[List[str]]:
-    r"""
-    Chemins <D,...,A,B,C> discriminants (implémentation pratique).
-    Conditions usuelles:
-      - D non adjacent C
-      - chemin non couvert
-      - pour tout V entre D et B : V collider sur le chemin et V *-> C
+def pag_edges_as_strings(C):
     """
-    if pag.adjacent(D, C):
-        return []
-
-    res = []
-    for p in all_simple_paths(pag, D, C, max_len):
-        if len(p) < 4:
-            continue
-        if p[-1] != C or p[-2] != B:
-            continue
-        A = p[-3]
-        if not (pag.adjacent(A, B) and pag.adjacent(B, C)):
-            continue
-
-        ok = True
-        for i in range(1, len(p) - 2):
-            V = p[i]
-            prev = p[i - 1]
-            nxt = p[i + 1]
-            # collider prev *-> V <-* nxt
-            if not (pag.is_arrow(prev, V) and pag.is_arrow(nxt, V)):
-                ok = False
-                break
-            # and V *-> C
-            if not pag.is_arrow(V, C):
-                ok = False
-                break
-
-        if ok and is_uncovered_path(pag, p):
-            res.append(p)
-
-    return res
-
-
-# Possible-D-SEP (Step B)
-
-def is_collider_on_path(pag: OrderedPAG, a: str, b: str, c: str) -> bool:
-    """b is collider on a-b-c iff a *-> b <-* c"""
-    return pag.is_arrow(a, b) and pag.is_arrow(c, b)
-
-
-def forms_triangle(pag: OrderedPAG, a: str, b: str, c: str) -> bool:
-    """triangle condition: a adjacent c"""
-    return pag.adjacent(a, c)
-
-
-def possible_d_sep(pag: OrderedPAG, x: str, y: str, max_len: int) -> Set[str]:
-    r"""
-    Possible-D-SEP(x,y):
-    v ∈ PDS(x,y) s'il existe un chemin <x=V0, V1, ..., Vk=v> tel que
-    pour chaque triple consécutif <Vi-1, Vi, Vi+1>, Vi est collider sur le chemin
-    OU (Vi-1, Vi, Vi+1) forme un triangle.
-
-      - On exclut explicitement x et y de PDS.
+    Affiche les arêtes sous forme lisible:
+    u(end_u) -- v(end_v)
     """
-    pds: Set[str] = set()
-
-    frontier = [(None, x, 0)]
-    visited = set([(None, x)])
-
-    while frontier:
-        prev, curr, dist = frontier.pop(0)
-        if dist >= max_len:
-            continue
-
-        for nb in pag.neighbors(curr):
-            if nb == prev:
-                continue
-
-            # validate local condition for triple prev-curr-nb
-            if prev is not None:
-                if not (is_collider_on_path(pag, prev, curr, nb) or forms_triangle(pag, prev, curr, nb)):
-                    continue
-
-            state = (curr, nb)
-            if state in visited:
-                continue
-            visited.add(state)
-
-            # Exclude x and y from PDS
-            if nb != x and nb != y:
-                pds.add(nb)
-
-            frontier.append((curr, nb, dist + 1))
-
-    return pds
+    out = []
+    for e in C.edges():
+        out.append(f"{e.u}({e.end_u}) -- {e.v}({e.end_v})")
+    return out

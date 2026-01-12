@@ -1,105 +1,218 @@
+# pag.py
 from __future__ import annotations
-from itertools import combinations
-from typing import Dict, FrozenSet, List, Optional, Set, Tuple
-import pyagrum as gum
+from dataclasses import dataclass
 
-Mark = str  # 'o' (circle), '-' (tail), '>' (arrowhead)
 
-class OrderedPAG:
-    r"""
-    PAG stocké sous forme ordonnée :
-      mark(a,b) = marque au bout 'a' sur l'arête a-b.
+@dataclass(frozen=True)
+class Edge:
+    """Représentation lisible d'une arête (utile pour debug/visualisation)."""
+    u: str
+    v: str
+    end_u: str
+    end_v: str
 
-    Exemples:
-      a o-o b : mark(a,b)='o', mark(b,a)='o'
-      a --> b : mark(a,b)='-', mark(b,a)='>'
-      a <-> b : mark(a,b)='>', mark(b,a)='>'
-      a --- b : mark(a,b)='-', mark(b,a)='-'
+
+class PAG:
+    """
+    PAG = Partial Ancestral Graph (structure de données)
+    - Graphe sur des nœuds observés
+    - Chaque arête (u,v) porte 2 marques d'extrémité : côté u et côté v
+      marque ∈ {"o", "arrow", "tail"}
+
+    Stockage interne:
+      _marks[frozenset({u,v})] = {u: mark_u, v: mark_v}
     """
 
-    def __init__(self, nodes: List[str]):
-        self.nodes = nodes
-        self._m: Dict[Tuple[str, str], Mark] = {}
+    def __init__(self, nodes):
+        self.nodes = list(nodes)
+        self._marks = {}  # key=frozenset({u,v}) -> {u: mark_u, v: mark_v}
 
-    def adjacent(self, a: str, b: str) -> bool:
-        return (a, b) in self._m
+    # -----------------
+    # Arêtes / voisins
+    # -----------------
+    def has_edge(self, u, v):
+        return u != v and frozenset((u, v)) in self._marks
 
-    def add_edge(self, a: str, b: str, ma: Mark = "o", mb: Mark = "o") -> None:
-        if self.adjacent(a, b):
+    def add_edge(self, u, v, mark_u="o", mark_v="o"):
+        if u == v:
             return
-        self._m[(a, b)] = ma
-        self._m[(b, a)] = mb
+        self._marks[frozenset((u, v))] = {u: mark_u, v: mark_v}
 
-    def remove_edge(self, a: str, b: str) -> None:
-        self._m.pop((a, b), None)
-        self._m.pop((b, a), None)
+    def remove_edge(self, u, v):
+        self._marks.pop(frozenset((u, v)), None)
 
-    def neighbors(self, a: str) -> Set[str]:
-        return {b for (x, b) in self._m.keys() if x == a}
+    def neighbors(self, u):
+        nbrs = set()
+        for key in self._marks:
+            if u in key:
+                a, b = tuple(key)
+                nbrs.add(a if b == u else b)
+        return nbrs
 
-    def mark(self, a: str, b: str) -> Mark:
-        return self._m[(a, b)]
+    def adj(self, u):
+        return self.neighbors(u)
 
-    def set_mark(self, a: str, b: str, m: Mark) -> bool:
-        if not self.adjacent(a, b):
+    # -----------------
+    # Marques endpoints
+    # -----------------
+    def get_end(self, u, v):
+        """Retourne la marque au niveau de u sur l'arête (u,v)."""
+        return self._marks[frozenset((u, v))][u]
+
+    def set_end(self, u, v, endpoint):
+        """Modifie la marque au niveau de u sur l'arête (u,v)."""
+        if not self.has_edge(u, v):
+            return
+        self._marks[frozenset((u, v))][u] = endpoint
+
+    def set_marks(self, u, v, mark_u, mark_v):
+        """Fixe les 2 extrémités de l'arête (u,v) en une fois."""
+        if not self.has_edge(u, v):
+            return
+        key = frozenset((u, v))
+        self._marks[key][u] = mark_u
+        self._marks[key][v] = mark_v
+
+    # -----------------
+    # Primitives endpoints (local)
+    # -----------------
+    def is_o(self, u, v):
+        return self.has_edge(u, v) and self.get_end(u, v) == "o"
+
+    def is_arrow(self, u, v):
+        return self.has_edge(u, v) and self.get_end(u, v) == "arrow"
+
+    def is_tail(self, u, v):
+        return self.has_edge(u, v) and self.get_end(u, v) == "tail"
+
+    def is_star(self, u, v):
+        # "*" = pas un cercle
+        return self.has_edge(u, v) and self.get_end(u, v) != "o"
+
+    def not_adjacent(self, u, v):
+        return not self.has_edge(u, v)
+
+    # -----------------
+    # Helpers d'orientation (local)
+    # -----------------
+    def orient_u_to_v(self, u, v):
+        """Force u -> v (tail au niveau de u, arrow au niveau de v)."""
+        if not self.has_edge(u, v):
             return False
-        old = self._m[(a, b)]
-        if old == m:
+        before_u = self.get_end(u, v)
+        before_v = self.get_end(v, u)
+        if before_u == "tail" and before_v == "arrow":
             return False
-        self._m[(a, b)] = m
+        self.set_end(u, v, "tail")
+        self.set_end(v, u, "arrow")
         return True
 
-    def set_edge(self, a: str, b: str, ma: Mark, mb: Mark) -> bool:
-        if not self.adjacent(a, b):
-            self.add_edge(a, b, ma, mb)
-            return True
-        changed = self.set_mark(a, b, ma)
-        changed |= self.set_mark(b, a, mb)
-        return changed
-
-    # ---- helpers ----
-    def is_circle(self, a: str, b: str) -> bool:
-        return self.adjacent(a, b) and self.mark(a, b) == "o"
-
-    def is_tail(self, a: str, b: str) -> bool:
-        return self.adjacent(a, b) and self.mark(a, b) == "-"
-
-    def is_arrow(self, a: str, b: str) -> bool:
-        """a *-> b  <=> mark(b,a) == '>'"""
-        return self.adjacent(a, b) and self.mark(b, a) == ">"
-
-    def orient_a_to_b(self, a: str, b: str) -> bool:
-        """a --> b"""
-        return self.set_edge(a, b, "-", ">")
-
-    def add_arrowhead_at_b(self, a: str, b: str) -> bool:
-        """a *-> b : impose '>' au bout b"""
-        if not self.adjacent(a, b):
+    def orient_bidirected(self, u, v):
+        """Force u <-> v (arrow aux deux extrémités)."""
+        if not self.has_edge(u, v):
             return False
-        return self.set_mark(b, a, ">")
-
-    def add_tail_at_a(self, a: str, b: str) -> bool:
-        """a --* b : impose '-' au bout a"""
-        if not self.adjacent(a, b):
+        bu = self.get_end(u, v)
+        bv = self.get_end(v, u)
+        if bu == "arrow" and bv == "arrow":
             return False
-        return self.set_mark(a, b, "-")
+        self.set_end(u, v, "arrow")
+        self.set_end(v, u, "arrow")
+        return True
 
-    def make_undirected(self, a: str, b: str) -> bool:
-        """a --- b"""
-        return self.set_edge(a, b, "-", "-")
+    def orient_undirected(self, u, v):
+        """Force u — v (tail aux deux extrémités)."""
+        if not self.has_edge(u, v):
+            return False
+        bu = self.get_end(u, v)
+        bv = self.get_end(v, u)
+        if bu == "tail" and bv == "tail":
+            return False
+        self.set_end(u, v, "tail")
+        self.set_end(v, u, "tail")
+        return True
 
-    def make_bidirected(self, a: str, b: str) -> bool:
-        """a <-> b"""
-        return self.set_edge(a, b, ">", ">")
+    def set_tail_at(self, u, v):
+        """Force juste l’extrémité côté u à tail (u -* v)."""
+        if not self.has_edge(u, v):
+            return False
+        if self.get_end(u, v) == "tail":
+            return False
+        self.set_end(u, v, "tail")
+        return True
 
-    def edges_as_strings(self) -> List[str]:
-        seen = set()
+    def set_arrow_at(self, u, v):
+        """Force juste l’extrémité côté u à arrow (u <-* v)."""
+        if not self.has_edge(u, v):
+            return False
+        if self.get_end(u, v) == "arrow":
+            return False
+        self.set_end(u, v, "arrow")
+        return True
+
+    def is_circle_edge(self, u, v):
+        """True ssi l'arête (u,v) est o-o."""
+        return self.is_o(u, v) and self.is_o(v, u)
+
+    def edge_allows_forward(self, u, v):
+        """
+        Condition standard pour "possibly directed" de u vers v :
+        il ne doit pas y avoir de tête de flèche au niveau de u sur (u,v).
+        """
+        return self.has_edge(u, v) and self.get_end(u, v) != "arrow"
+
+    # -----------------
+    # Helpers déjà présents
+    # -----------------
+    def orient_arrow_at(self, u, v):
+        """Met une tête de flèche du côté v sur (u,v) => u *-> v (ne modifie pas côté u)."""
+        if self.has_edge(u, v):
+            self.set_end(v, u, "arrow")
+
+    def orient_tail_at(self, u, v):
+        """Met une barre du côté v sur (u,v) => u *- v (ne modifie pas côté u)."""
+        if self.has_edge(u, v):
+            self.set_end(v, u, "tail")
+
+    def make_undirected_o_o(self, u, v):
+        """Force (u,v) en o-o."""
+        if self.has_edge(u, v):
+            self.set_marks(u, v, "o", "o")
+
+    def reset_all_to_circles(self):
+        """Met toutes les arêtes en o-o (Alg 4.3 ligne 17)."""
+        for d in self._marks.values():
+            for n in list(d.keys()):
+                d[n] = "o"
+
+    # -----------------
+    # Tests structurels
+    # -----------------
+    def is_adjacent(self, u, v):
+        return self.has_edge(u, v)
+
+    def is_triangle(self, a, b, c):
+        """a, b, c forment un triangle si toutes les arêtes existent."""
+        return self.has_edge(a, b) and self.has_edge(b, c) and self.has_edge(a, c)
+
+    def is_collider(self, a, b, c):
+        """Teste a *-> b <-* c : deux arrowheads pointent vers b."""
+        if not (self.has_edge(a, b) and self.has_edge(b, c)):
+            return False
+        return (self.get_end(b, a) == "arrow") and (self.get_end(b, c) == "arrow")
+
+    # -----------------
+    # Itération / debug
+    # -----------------
+    def edges(self):
+        """Liste d'arêtes (utile pour affichage/exports)."""
         out = []
-        for a in self.nodes:
-            for b in self.neighbors(a):
-                if (b, a) in seen:
-                    continue
-                seen.add((a, b))
-                out.append(f"{a} {self.mark(a,b)}-{self.mark(b,a)} {b}")
+        for key, d in self._marks.items():
+            u, v = tuple(key)
+            out.append(Edge(u, v, d[u], d[v]))
         return out
 
+    def __str__(self):
+        parts = []
+        for e in self.edges():
+            parts.append(f"{e.u}({e.end_u}) -- {e.v}({e.end_v})")
+        return "PAG[" + ", ".join(parts) + "]"
