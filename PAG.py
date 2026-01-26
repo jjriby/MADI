@@ -1,7 +1,9 @@
 # pag.py
 from __future__ import annotations
+from copy import deepcopy
 from dataclasses import dataclass
 
+import pyagrum as gum
 
 @dataclass(frozen=True)
 class Edge:
@@ -26,6 +28,7 @@ class PAG:
     def __init__(self, nodes):
         self.nodes = list(nodes)
         self._marks = {}  # key=frozenset({u,v}) -> {u: mark_u, v: mark_v}
+        self.latent_id = 0
 
     # -----------------
     # Arêtes / voisins
@@ -216,3 +219,94 @@ class PAG:
         for e in self.edges():
             parts.append(f"{e.u}({e.end_u}) -- {e.v}({e.end_v})")
         return "PAG[" + ", ".join(parts) + "]"
+    
+    # -----------------
+    # Equivalence class
+    # -----------------
+    def is_dag(self):
+        for u in self.nodes:
+            for v in self.nodes:
+                if self.is_o(u, v) or self.is_o(v, u):
+                    return False
+                if self.is_arrow(u, v) and self.is_arrow(v, u):
+                    return False
+        return True
+
+    def eq_class(self, add=False):
+        # create a queue of PAGs
+        # we transform each one step closer to a DAG by:
+        # - orienting an edge with an o
+        # - adding a latent variable for bi-directed edges
+        processing = [deepcopy(self)]
+        out = []
+
+        while processing:
+            curr = processing.pop(0)
+            if curr.is_dag():
+                out.append(curr)
+                continue
+            
+            done = False
+            for u in curr.nodes:
+                if done:
+                    break
+                for v in curr.nodes:
+                    if curr.has_edge(u, v):
+                        if curr.is_o(u, v):
+                            copy_arrow = deepcopy(curr)
+                            copy_arrow.set_end(u, v, "arrow")
+                            processing.append(copy_arrow)
+
+                            if not curr.is_tail(v, u):
+                                copy_tail = deepcopy(curr)
+                                copy_tail.set_end(u, v, "tail")
+                                processing.append(copy_tail)
+                            done = True
+                            break
+                        
+                        elif curr.is_arrow(u, v) and curr.is_arrow(v, u):
+                            if add:
+                                latent = f"L{self.latent_id}"
+                                self.latent_id += 1
+                                copy_latent = deepcopy(curr)
+                                copy_latent.nodes.append(latent)
+
+                                copy_latent.remove_edge(u, v)
+                                
+                                copy_latent.add_edge(latent, u, "tail", "arrow")
+                                copy_latent.add_edge(latent, v, "tail", "arrow")
+                                processing.append(copy_latent)
+
+                            else:
+                                # don't add latent notes to be able to compare the BNs
+                                copy_latent = deepcopy(curr)
+                                copy_latent.remove_edge(u, v)
+                                processing.append(copy_latent)
+
+                            done = True
+                            break
+        return out
+    
+    # -----------------
+    # Transform PAG to BN
+    # -----------------
+    def to_bn(self, bn_ref):
+        bn = gum.BayesNet()
+
+        # add nodes to BN
+        # (use size 2 for variable domains since it doesn't matter for evaluation)
+        for node in self.nodes:
+            if node in bn_ref.nodes():
+                var = bn_ref.variable(node)
+                bn.add(gum.RangeVariable(node, node, var.minVal(), var.maxVal()))
+            else:
+                bn.add(gum.RangeVariable(node, node, 0, 1))
+
+        # add edges to BN
+        for u in self.nodes:
+            for v in self.nodes:
+                if self.has_edge(u, v):
+                    if self.is_arrow(u, v):
+                        bn.addArc(u, v)
+
+        return bn
