@@ -15,21 +15,18 @@ from FCI import fci
 from utils import draw_pag, make_bnlearner_ci
 
 # -------------------------------------------------
-# Set evaluation parameters
-# -------------------------------------------------
-num_nodes = [5, 10, 15, 20, 25]
-ratio_fraction = [i/10 for i in range(11, 21, 2)]
-domain_size = [2, 3, 4]
-sample_size = [100, 250, 500, 1_000]
-
-time_limit = 60
-alpha = 0.05
-test = "chi2"
-
-# -------------------------------------------------
 # Run evaluation with full observations
 # -------------------------------------------------
 def full():
+    num_nodes = [5, 10, 15, 20, 25]
+    ratio_fraction = [i/10 for i in range(11, 21, 2)]
+    domain_size = [2, 3, 4]
+    sample_size = [100, 250, 500, 1_000]
+
+    time_limit = 60
+    alpha = 0.05
+    test = "chi2"
+
     # define a DataFrame to hold the results
     n_runs = 3 * len(num_nodes) * len(ratio_fraction) * len(domain_size) * len(sample_size) * 5
     results = pd.DataFrame({
@@ -105,7 +102,7 @@ def full():
         if C:
             fci_eq = C.eq_class(add=True)
             not_same_size = 0
-            metrics_fci = {"equiv": False, "precision": -1, "recall": -1, "f1": -1, "pure": -1, "structural": -1}
+            metrics_fci = {"equiv": False, "precision": 0.0, "recall": 0.0, "f1": 0.0, "pure": 0, "structural": 0}
 
             for i in range(len(fci_eq)):
                 g = fci_eq[i]
@@ -146,10 +143,101 @@ def compute(true, pred):
 
     return results
 
-full()
+def analyse_full():
+    results = pd.read_csv("results_full.csv")
+
+    # 1. For each model, when is it able to find the true structure
+    true_miic = results.loc[(results["equiv"]) & (results["algorithm"]=="MIIC"),
+                            ["num_nodes", "ratio_fraction", "domain_size", "sample_size", "trial"]]
+    print(f"MIIC was correct in {len(true_miic)} cases.")
+
+    true_ghc = results.loc[(results["equiv"]) & (results["algorithm"]=="GHC"),
+                            ["num_nodes", "ratio_fraction", "domain_size", "sample_size", "trial"]]
+    print(f"GHC was correct in {len(true_ghc)} cases.")
+
+    true_fci = results.loc[(results["equiv"]) & (results["algorithm"]=="FCI"),
+                            ["num_nodes", "ratio_fraction", "domain_size", "sample_size", "trial"]]
+    print(f"FCI was correct in {len(true_fci)} cases.")
+
+    # 2. Make 5 plots (on the same figure, one for each metric) of the three models for:
+    # - as num_nodes varies, best other parameters (ratio, domain, sample)
+    # - etc. (all other possible combinations)
+    metrics = ["precision", "recall", "f1", "pure", "structural"]
+    parameters = ["num_nodes", "ratio_fraction", "domain_size", "sample_size"]
+    algorithms = ["MIIC", "GHC", "FCI"]
+    
+    fig, axes = plt.subplots(5, 4, figsize=(20, 20))
+    fig.suptitle("Algorithm Performance Across Parameters", fontsize=16, y=0.995)
+    
+    colors = {"MIIC": "blue", "GHC": "green", "FCI": "red"}
+    markers = {"MIIC": "o", "GHC": "s", "FCI": "^"}
+    
+    for row, metric in enumerate(metrics):
+        for col, param in enumerate(parameters):
+            ax = axes[row, col]
+            
+            # For each parameter, we want to vary it and keep others at their best values
+            # We'll aggregate across trials and optimize over other parameters
+            other_params = [p for p in parameters if p != param]
+            
+            for algo in algorithms:
+                algo_data = results[results["algorithm"] == algo].copy()
+                
+                # Group by the parameter we're varying
+                param_values = sorted(algo_data[param].unique())
+                mean_values = []
+                
+                for val in param_values:
+                    subset = algo_data[algo_data[param] == val]
+                    
+                    # For each value of this parameter, find the best combination of other parameters
+                    # by taking the mean across trials and finding the ma
+                    grouped = subset.groupby(other_params)[metric].mean()
+                    
+                    # Get all trials for the best parameter combination
+                    best_params = grouped.idxmax()
+                    if not isinstance(best_params, tuple):
+                        best_params = (best_params,)
+                    
+                    # Filter to get all trials with these best parameters
+                    mask = pd.Series(True, index=subset.index)
+                    for i, other_param in enumerate(other_params):
+                        mask &= (subset[other_param] == best_params[i])
+                    
+                    best_subset = subset[mask]
+                    mean_values.append(best_subset[metric].mean())
+                   
+                # Plot with error bars
+                ax.plot(param_values, mean_values, 
+                        label=algo, color=colors[algo], marker=markers[algo],
+                        linewidth=2, markersize=6)
+            
+            # Formatting
+            ax.set_xlabel(param.replace("_", " ").title(), fontsize=10)
+            if col == 0:
+                ax.set_ylabel(metric.replace("_", " ").title(), fontsize=10)
+            ax.grid(True, alpha=0.3)
+            ax.legend(loc="best", fontsize=8)
+            
+            # Set appropriate y-limits based on metric
+            if metric in ["precision", "recall", "f1"]:
+                ax.set_ylim(-0.05, 1.05)
+            
+    plt.tight_layout()
+    plt.savefig("algorithm_comparison.png", dpi=300, bbox_inches='tight')
+    print("Saved plot to algorithm_comparison.png")
+
+analyse_full()
 
 # -------------------------------------------------
 # Run evaluation with partial observations
 # -------------------------------------------------
+# Test whether FCI is capable of detecting latent variables
+# (look at different num_nodes, ratio_fraction and sample_size for domain_size=2)
 def partial():
-    pass
+    num_nodes = [5, 10, 15, 20, 25]
+    ratio_fraction = [i/10 for i in range(11, 21, 2)]
+    domain_size = [2, 3, 4]
+    sample_size = [100, 250, 500, 1_000]
+
+    # Test masking a single node, or two
