@@ -3,7 +3,11 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 
+import pydot as dot
 import pyagrum as gum
+from pyagrum.pyagrum import InvalidDirectedCycle
+
+from utils import draw_pag
 
 @dataclass(frozen=True)
 class Edge:
@@ -223,6 +227,30 @@ class PAG:
     # -----------------
     # Equivalence class
     # -----------------
+    def has_cycle(self):
+        visited = set()
+        rec_stack = set()
+
+        def dfs(node):
+            visited.add(node)
+            rec_stack.add(node)
+
+            for neighbor in self.neighbors(node):
+                if self.is_tail(node, neighbor) and self.is_arrow(neighbor, node):
+                    if neighbor not in visited:
+                        if dfs(neighbor):
+                            return True
+                        
+                    elif neighbor in rec_stack:
+                        return True
+
+        for node in self.nodes:
+            if node not in visited:
+                if dfs(node):
+                    return True
+            
+        return False
+
     def is_dag(self):
         for u in self.nodes:
             for v in self.nodes:
@@ -242,7 +270,9 @@ class PAG:
 
         while processing:
             curr = processing.pop(0)
-            if curr.is_dag():
+            if curr.has_cycle():
+                continue
+            elif curr.is_dag():
                 out.append(curr)
                 continue
             
@@ -305,8 +335,8 @@ class PAG:
         # add edges to BN
         for u in self.nodes:
             for v in self.nodes:
-                if self.has_edge(u, v):
+                if self.has_edge(u, v) and not bn.existsArc(u, v):
                     if self.is_arrow(u, v):
-                        bn.addArc(u, v)
-
+                        bn.addArc(v, u)
+                        
         return bn
