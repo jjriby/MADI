@@ -243,6 +243,8 @@ class PAG:
                         
                     elif neighbor in rec_stack:
                         return True
+            rec_stack.remove(node)
+            return False
 
         for node in self.nodes:
             if node not in visited:
@@ -270,6 +272,7 @@ class PAG:
 
         while processing:
             curr = processing.pop(0)
+            
             if curr.has_cycle():
                 continue
             elif curr.is_dag():
@@ -316,7 +319,7 @@ class PAG:
                             done = True
                             break
         return out
-    
+
     # -----------------
     # Transform PAG to BN
     # -----------------

@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import itertools
 import time
+import os
 
 import pydot as dot
 import pyagrum as gum
@@ -17,11 +18,11 @@ from utils import draw_pag, make_bnlearner_ci
 # -------------------------------------------------
 # Run evaluation with full observations
 # -------------------------------------------------
-def full():
+def full(outfile="results_full.csv"):
     num_nodes = [5, 10, 15, 20, 25]
     ratio_fraction = [i/10 for i in range(11, 21, 2)]
     domain_size = [2, 3, 4]
-    sample_size = [100, 250, 500, 1_000]
+    sample_size = [100, 250, 500]
 
     time_limit = 60
     alpha = 0.05
@@ -123,7 +124,7 @@ def full():
             metrics = list(metrics_fci.values())
             results.loc[3*idx+2] = ["FCI", n, r, d, s, trial, fci_time, *metrics]
         idx += 1
-    results.to_csv("results_full.csv")
+    results.to_csv("results/"+outfile)
 
 def compute(true, pred):
     # 1. Compare to true BN using GraphicalBNComparator
@@ -143,8 +144,8 @@ def compute(true, pred):
 
     return results
 
-def analyse_full():
-    results = pd.read_csv("results_full.csv")
+def analyse_full(outfile="figures/algorithm_comparison.png"):
+    results = pd.read_csv("results/results_full.csv")
 
     # 1. For each model, when is it able to find the true structure
     true_miic = results.loc[(results["equiv"]) & (results["algorithm"]=="MIIC"),
@@ -159,14 +160,14 @@ def analyse_full():
                             ["num_nodes", "ratio_fraction", "domain_size", "sample_size", "trial"]]
     print(f"FCI was correct in {len(true_fci)} cases.")
 
-    # 2. Make 5 plots (on the same figure, one for each metric) of the three models for:
+    # 2. Make 6 plots (on the same figure, one for each metric) of the three models for:
     # - as num_nodes varies, best other parameters (ratio, domain, sample)
     # - etc. (all other possible combinations)
-    metrics = ["precision", "recall", "f1", "pure", "structural"]
+    metrics = ["time", "precision", "recall", "f1", "pure", "structural"]
     parameters = ["num_nodes", "ratio_fraction", "domain_size", "sample_size"]
     algorithms = ["MIIC", "GHC", "FCI"]
     
-    fig, axes = plt.subplots(5, 4, figsize=(20, 20))
+    fig, axes = plt.subplots(6, 4, figsize=(20, 20))
     fig.suptitle("Algorithm Performance Across Parameters", fontsize=16, y=0.995)
     
     colors = {"MIIC": "blue", "GHC": "green", "FCI": "red"}
@@ -224,8 +225,19 @@ def analyse_full():
                 ax.set_ylim(-0.05, 1.05)
             
     plt.tight_layout()
-    plt.savefig("algorithm_comparison.png", dpi=300, bbox_inches='tight')
-    print("Saved plot to algorithm_comparison.png")
+    plt.savefig(outfile, dpi=300, bbox_inches='tight')
+    print(f"Saved plot to {outfile}")
+
+def fci_times():
+    results = pd.read_csv("results_full.csv")
+    res_fci = results[results["algorithm"]=="FCI"][["time", "domain_size"]]
+    times = res_fci.groupby("domain_size").mean()
+    
+    plt.plot(times.index, times["time"], color="red", marker="^", linewidth=2, markersize=6)
+    plt.xlabel("Domain Size")
+    plt.ylabel("Time")
+    plt.grid(True, alpha=0.3)
+    plt.savefig("explain_fci_domain.png")
 
 # -------------------------------------------------
 # Run evaluation with partial observations
@@ -323,9 +335,77 @@ def partial():
             metrics = list(metrics_fci.values())
             results.loc[idx+i] = [n, name, r, d, s, trial, fci_time, *metrics]
         idx += len(names)
-    results.to_csv("results_partial.csv")
-
-partial()
+    results.to_csv("results/results_partial.csv")
 
 def analyse_partial():
     pass
+
+# test what is happening manually, all scores are 0 (variables don't have the same name)
+# 1. create random BN
+# 2. run FCI
+# 3. plot BN and all DAGs
+# 4. compare manually
+def test_eq():
+    import os
+
+    if os.path.exists(os.path.join(os.getcwd(), "found")):
+        os.system("rm -rf found")
+        os.system("mkdir found")
+
+    alpha = 0.05
+    test = "chi2"
+
+    bn_test = gum.randomBN(n=5, ratio_arc=1.2, domain_size=2)
+    gumimage.export(bn_test, "test.png")
+
+    dbgen = gum.BNDatabaseGenerator(bn_test)
+    dbgen.drawSamples(500)
+    df = dbgen.to_pandas()
+
+    name = list(bn_test.names())[0]
+    df = df.drop(columns=[name])
+    ci_test = make_bnlearner_ci(df, alpha=alpha, test=test)
+    X = list(df.columns)
+    C, sepset = fci(X, ci_test, alpha=alpha)
+
+    dot = draw_pag(C, filename="found/found.png")
+    dot.render("found/found", format="png", cleanup=True)
+
+    fci_eq = C.eq_class(add=True)
+    print(len(fci_eq))
+    for i, g in enumerate(fci_eq):
+        g_bn = g.to_bn(bn_test)
+        gumimage.export(g_bn, f"found/found_{i}.png")
+
+def test_asia():
+    alpha = 0.05
+    test = "chi2"
+
+    new = os.path.join(os.getcwd(), "asia")
+    if not os.path.exists(new):
+        os.makedirs(new)
+
+    bn = gum.load("asia.bif")
+    dbgen = gum.BNDatabaseGenerator(bn)
+    dbgen.drawSamples(200)
+    df_full = dbgen.to_pandas()
+
+    names = list(bn.names())
+    for name in names:
+        df = df_full.drop(columns=[name])
+        ci_test = make_bnlearner_ci(df, alpha=alpha, test=test)
+
+        X = list(df.columns)
+        C, _ = fci(X, ci_test, alpha)
+
+        new = os.path.join(os.getcwd(), f"asia/{name}")
+        if not os.path.exists(new):
+            os.makedirs(new)
+
+        if C:
+            fci_eq = C.eq_class(add=True)
+            for i, g in enumerate(fci_eq):
+                g_bn = g.to_bn(bn)
+                gumimage.export(g_bn, f"{new}/{i}.png")
+
+full("results_full_new.csv")
