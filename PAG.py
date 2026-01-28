@@ -1,17 +1,12 @@
-# pag.py
 from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 
-import pydot as dot
 import pyagrum as gum
-from pyagrum.pyagrum import InvalidDirectedCycle
-
-from utils import draw_pag
 
 @dataclass(frozen=True)
 class Edge:
-    """Représentation lisible d'une arête (utile pour debug/visualisation)."""
+    """Représentation d'une arête ."""
     u: str
     v: str
     end_u: str
@@ -24,14 +19,11 @@ class PAG:
     - Graphe sur des nœuds observés
     - Chaque arête (u,v) porte 2 marques d'extrémité : côté u et côté v
       marque ∈ {"o", "arrow", "tail"}
-
-    Stockage interne:
-      _marks[frozenset({u,v})] = {u: mark_u, v: mark_v}
     """
 
     def __init__(self, nodes):
         self.nodes = list(nodes)
-        self._marks = {}  # key=frozenset({u,v}) -> {u: mark_u, v: mark_v}
+        self._marks = {} 
         self.latent_id = 0
 
     # -----------------
@@ -81,7 +73,7 @@ class PAG:
         self._marks[key][v] = mark_v
 
     # -----------------
-    # Primitives endpoints (local)
+    # Primitives endpoints
     # -----------------
     def is_o(self, u, v):
         return self.has_edge(u, v) and self.get_end(u, v) == "o"
@@ -100,7 +92,7 @@ class PAG:
         return not self.has_edge(u, v)
 
     # -----------------
-    # Helpers d'orientation (local)
+    # Helpers d'orientation
     # -----------------
     def orient_u_to_v(self, u, v):
         """Force u -> v (tail au niveau de u, arrow au niveau de v)."""
@@ -167,9 +159,6 @@ class PAG:
         """
         return self.has_edge(u, v) and self.get_end(u, v) != "arrow"
 
-    # -----------------
-    # Helpers déjà présents
-    # -----------------
     def orient_arrow_at(self, u, v):
         """Met une tête de flèche du côté v sur (u,v) => u *-> v (ne modifie pas côté u)."""
         if self.has_edge(u, v):
@@ -207,9 +196,8 @@ class PAG:
             return False
         return (self.get_end(b, a) == "arrow") and (self.get_end(b, c) == "arrow")
 
-    # -----------------
-    # Itération / debug
-    # -----------------
+
+
     def edges(self):
         """Liste d'arêtes (utile pour affichage/exports)."""
         out = []
@@ -252,7 +240,7 @@ class PAG:
                     return True
             
         return False
-
+    
     def is_dag(self):
         for u in self.nodes:
             for v in self.nodes:
@@ -263,19 +251,19 @@ class PAG:
         return True
 
     def eq_class(self, add=False):
-        # create a queue of PAGs
-        # we transform each one step closer to a DAG by:
-        # - orienting an edge with an o
-        # - adding a latent variable for bi-directed edges
+        """ create a queue of PAGs
+        we transform each one step closer to a DAG by:
+         - orienting an edge with an o
+         - adding a latent variable for bi-directed edges """
         processing = [deepcopy(self)]
         out = []
 
         while processing:
             curr = processing.pop(0)
-            
+
             if curr.has_cycle():
                 continue
-            elif curr.is_dag():
+            if curr.is_dag():
                 out.append(curr)
                 continue
             
@@ -319,7 +307,7 @@ class PAG:
                             done = True
                             break
         return out
-
+    
     # -----------------
     # Transform PAG to BN
     # -----------------
@@ -338,8 +326,8 @@ class PAG:
         # add edges to BN
         for u in self.nodes:
             for v in self.nodes:
-                if self.has_edge(u, v) and not bn.existsArc(u, v):
+                if self.has_edge(u, v):
                     if self.is_arrow(u, v):
-                        bn.addArc(v, u)
-                        
+                        bn.addArc(u, v)
+
         return bn

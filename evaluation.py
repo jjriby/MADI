@@ -144,8 +144,8 @@ def compute(true, pred):
 
     return results
 
-def analyse_full(outfile="figures/algorithm_comparison.png"):
-    results = pd.read_csv("results/results_full.csv")
+def analyse_full(infile="results/results_full.csv", outfile="figures/algorithm_comparison.png"):
+    results = pd.read_csv(infile)
 
     # 1. For each model, when is it able to find the true structure
     true_miic = results.loc[(results["equiv"]) & (results["algorithm"]=="MIIC"),
@@ -377,17 +377,21 @@ def test_eq():
         g_bn = g.to_bn(bn_test)
         gumimage.export(g_bn, f"found/found_{i}.png")
 
-def test_asia():
+def test_asia(load = False):
     alpha = 0.05
-    test = "chi2"
+    test = "g2"
+    sample_size = 10_000_000
 
-    new = os.path.join(os.getcwd(), "asia")
+    new = os.path.join(os.getcwd(), f"asia_{sample_size}")
     if not os.path.exists(new):
         os.makedirs(new)
 
-    bn = gum.load("asia.bif")
+    bn = gum.loadBN("asia.bif")
+    if not os.path.exists(f"asia_{sample_size}/true.png"):
+        gumimage.export(bn, f"asia_{sample_size}/true.png")
+
     dbgen = gum.BNDatabaseGenerator(bn)
-    dbgen.drawSamples(200)
+    dbgen.drawSamples(sample_size)
     df_full = dbgen.to_pandas()
 
     names = list(bn.names())
@@ -398,14 +402,20 @@ def test_asia():
         X = list(df.columns)
         C, _ = fci(X, ci_test, alpha)
 
-        new = os.path.join(os.getcwd(), f"asia/{name}")
-        if not os.path.exists(new):
-            os.makedirs(new)
+        dot = draw_pag(C, filename=f"asia_{sample_size}/predicted")
+        dot.render(f"asia_{sample_size}/predicted", format="png", cleanup=True)
 
-        if C:
-            fci_eq = C.eq_class(add=True)
-            for i, g in enumerate(fci_eq):
-                g_bn = g.to_bn(bn)
-                gumimage.export(g_bn, f"{new}/{i}.png")
+        if load:
+            new = os.path.join(os.getcwd(), f"asia_{sample_size}/{name}")
+            if not os.path.exists(new):
+                os.makedirs(new)
 
-full("results_full_new.csv")
+            if C:
+                fci_eq = C.eq_class(add=True)
+                for i in range(min(len(fci_eq), 10)):
+                    g = fci_eq[i]
+                    g_bn = g.to_bn(bn)
+                    print(f"Added image {name}_{i}.")
+                    gumimage.export(g_bn, f"{new}/{i}.png")
+
+test_asia(lead=True)
