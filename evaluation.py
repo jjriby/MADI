@@ -108,7 +108,7 @@ def full():
                 g = fci_eq[i]
                 g_bn = g.to_bn(bn)
                 
-                # we report a single results
+                # we report a single result
                 # either an equivalent graph if it exists
                 # otherwise, the one with the highest F1
                 if bn.size() == g_bn.size():
@@ -227,8 +227,6 @@ def analyse_full():
     plt.savefig("algorithm_comparison.png", dpi=300, bbox_inches='tight')
     print("Saved plot to algorithm_comparison.png")
 
-analyse_full()
-
 # -------------------------------------------------
 # Run evaluation with partial observations
 # -------------------------------------------------
@@ -238,6 +236,96 @@ def partial():
     num_nodes = [5, 10, 15, 20, 25]
     ratio_fraction = [i/10 for i in range(11, 21, 2)]
     domain_size = [2, 3, 4]
-    sample_size = [100, 250, 500, 1_000]
+    sample_size = [100, 250, 500]
 
-    # Test masking a single node, or two
+    time_limit = 60
+    alpha = 0.05
+    test = "chi2"
+
+    n_runs = sum(num_nodes) * len(ratio_fraction) * len(domain_size) * len(sample_size) * 5
+    results = pd.DataFrame({
+        "num_nodes": [0] * n_runs,
+        "node_removed": [None] * n_runs,
+        "ratio_fraction": [0.0] * n_runs,
+        "domain_size": [0] * n_runs,
+        "sample_size": [0] * n_runs,
+        "trial": [0] * n_runs,
+        "time": [0.0] * n_runs,
+        "equiv": [False] * n_runs,
+        "precision": [0.0] * n_runs,
+        "recall": [0.0] * n_runs,
+        "f1": [0.0] * n_runs,
+        "pure": [0] * n_runs,
+        "structural": [0] * n_runs,
+        "avg_found": [0.0] * n_runs
+    })
+
+    # Test masking a single node
+    idx = 0
+    for n, r, d, s, trial in itertools.product(num_nodes, ratio_fraction, domain_size, sample_size, range(5)):
+        print(f"Running {(n, r, d, s, trial)}")
+        # 1. Create random BN
+        bn = gum.randomBN(n=n, ratio_arc=r, domain_size=d)
+        dbgen = gum.BNDatabaseGenerator(bn)
+        dbgen.drawSamples(s)
+        df_full = dbgen.to_pandas()
+
+        # 2. Create a dataset with a node removed, for each node
+        names = list(bn.names())
+        for i in range(len(names)):
+            name = names[i]
+            df = df_full.drop(columns=[name])
+            ci_test = make_bnlearner_ci(df, alpha=alpha, test=test)
+
+            X = list(df.columns)
+            start_fci = time.time()
+            try:
+                C, sepset = func_timeout(time_limit, fci, args=(X, ci_test, alpha))
+                fci_time = time.time() - start_fci
+            except FunctionTimedOut:
+                C = None
+                fci_time = time.time() - start_fci
+                print(f"FCI timed out on: {(n, r, d, s)})")
+
+            # 3. Compare to true bn
+            if C:
+                fci_eq = C.eq_class(add=True)
+                metrics_fci = {"equiv": False, "precision": 0.0, "recall": 0.0, "f1": 0.0, "pure": 0, "structural": 0}
+
+                found = 0
+                for j in range(len(fci_eq)):
+                    g = fci_eq[j]
+                    g_bn = g.to_bn(bn)
+                    found = 0
+                
+                    # we report a single result
+                    # either an equivalent graph if it exists
+                    # otherwise, the one with the highest F1
+                    if bn.size() == g_bn.size():
+                        metrics_temp = compute(bn, g_bn)
+                        if metrics_temp["equiv"]:
+                            metrics_fci = metrics_temp
+                        elif metrics_temp["f1"] > metrics_fci["f1"]:
+                            metrics_fci = metrics_temp
+                    else:
+                        found += (g_bn.size() - len(C.nodes))
+
+                if metrics_fci["equiv"]:
+                    metrics_fci["avg_found"] = 1
+                # might have no DAGs in the equivalence class
+                elif len(fci_eq) > 0:
+                    metrics_fci["avg_found"] = found / len(fci_eq)
+                else:
+                    metrics_fci["avg_found"] = 0
+            else:
+                metrics_fci = {"equiv": None, "precision": None, "recall": None, "f1": None, "pure": None, "structural": None, "avg_found": None}
+
+            metrics = list(metrics_fci.values())
+            results.loc[idx+i] = [n, name, r, d, s, trial, fci_time, *metrics]
+        idx += len(names)
+    results.to_csv("results_partial.csv")
+
+partial()
+
+def analyse_partial():
+    pass
